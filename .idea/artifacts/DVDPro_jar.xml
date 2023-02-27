@@ -1,0 +1,10 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="DVDPro:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/DVDPro_jar</output-path>
+    <root id="archive" name="DVDPro.jar">
+      <element id="module-output" name="DVDPro" />
+      <element id="extracted-dir" path="$PROJECT_DIR$/com.cycastic.javabase.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$PROJECT_DIR$/com.formdev.flatlaf.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
