@@ -10,6 +10,7 @@ import misc.L;
 import org.json.JSONObject;
 import ui.auth_window.AuthWindow;
 import ui.auth_window.AuthWindowAdapter;
+import ui.auth_window.user_create.UserCreateForm;
 
 import javax.swing.*;
 import java.awt.*;
@@ -22,11 +23,16 @@ public class Main {
             WindowNavigator.createMainWindow();
         }
         public static void connectionFailed(AuthWindow aw){
-            JOptionPane.showMessageDialog(aw, "Không thể kết nối đến máy chủ Firebase. Hãy kiểm tra lại tiín hiệu mạng.");
+            JOptionPane.showMessageDialog(aw, "Không thể kết nối đến máy chủ Firebase. Hãy kiểm tra lại tín hiệu mạng.");
 
             aw.unlock_input();
         }
         public static void requestFailed(AuthWindow aw, String s){
+            if (s.isEmpty()){
+                JOptionPane.showMessageDialog(aw, "Xác thực thất bại.");
+                aw.unlock_input();
+                return;
+            }
             JSONObject err_parse = new JSONObject(s);
             Map<String, Object> err_map = (Map<String, Object>) err_parse.toMap().get("error");
             String err_code = err_map.get("message").toString();
@@ -55,13 +61,17 @@ public class Main {
                 @Override
                 public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
                     if (firestoreTaskResult.getDocuments().isEmpty()){
+                        UserCreateForm.UserInfo info = new UserCreateForm().getUserInfo();
                         FirestoreQuery allocateUserProfile = new FirestoreQuery(FirestoreQuery.QueryType.CREATE_DOCUMENT);
                         Map<String, Object> document = new HashMap<>();
-                        document.put("age", 18);
+                        document.put("dob", info.unixBirthday);
+                        document.put("username", info.username);
+                        // Homelander
+                        document.put("pfp", "https://i.pinimg.com/originals/9a/bb/94/9abb9492b3743a8d65b3052b969a9221.jpg");
+                        document.put("renting", "");
                         document.put("lost", new ArrayList<>());
-                        document.put("renting", new ArrayList<>());
-                        document.put("username", "Marry Sue");
                         document.put("uid", uid);
+                        document.put("rented", 0);
                         allocateUserProfile.onCollection("users").create(document).onDocument(uid);
                         WindowNavigator.db().query(allocateUserProfile, new FirestoreTaskReceiver() {
                             @Override

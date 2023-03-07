@@ -1,5 +1,7 @@
 package ui.auth_window;
 
+import entry.WindowNavigator;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
@@ -8,8 +10,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
 public class AuthWindow extends JFrame {
-    public static final int W_HEIGHT = 270;
-    public static final int W_WIDTH = 450;
+    public static final Dimension WINDOW_SIZE = new Dimension(450, 270);
 
     private JPanel MainPanel;
     private JLabel l_main;
@@ -63,16 +64,10 @@ public class AuthWindow extends JFrame {
 
     public AuthWindow(){
         super("Quản lý đĩa DVD UwU");
-        GraphicsDevice gd = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
-        int width = gd.getDisplayMode().getWidth();
-        int height = gd.getDisplayMode().getHeight();
-        // Căn cửa sổ giữa màn hình
-        if (width > W_WIDTH && height > W_HEIGHT){
-            setLocation(new Point((width / 2) - (W_WIDTH / 2), (height / 2) - (W_HEIGHT / 2)));
-        }
+        setLocation(WindowNavigator.getCenterOfScreen(this, WINDOW_SIZE));
         setContentPane(MainPanel);
         setVisible(true);
-        setSize(new Dimension(W_WIDTH, W_HEIGHT));
+        setSize(WINDOW_SIZE);
         setResizable(false);
         //Set mode ở trong constructor để thuận tiện cho việc thử nghiệm
         set_mode(is_logging_in);

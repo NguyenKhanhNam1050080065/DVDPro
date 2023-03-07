@@ -100,11 +100,31 @@ public class WindowNavigator {
     }
     public static void closeWindow(Window win){
         synchronized (singleton){
-            win.dispose();
             if (win == singleton.currentMainWindow) {
                 singleton.currentMainWindow = null;
                 shutdown();
             }
+            win.dispose();
         }
+    }
+    public static GraphicsDevice getGraphicsDevice(Window win){
+        GraphicsDevice gd = null;
+        try{
+            gd = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
+        } catch (HeadlessException e) {
+            L.log("AuthWindow", "This application is running in headless mode and cannot continue.");
+            WindowNavigator.closeWindow(win);
+        }
+        return gd;
+    }
+    public static Point getCenterOfScreen(Window win, Dimension dm){
+        GraphicsDevice gd = getGraphicsDevice(win);
+        int width = gd.getDisplayMode().getWidth();
+        int height = gd.getDisplayMode().getHeight();
+        // Căn cửa sổ giữa màn hình
+        if (width > dm.width && height > dm.height){
+            return new Point((width / 2) - (dm.width / 2), (height / 2) - (dm.height / 2));
+        }
+        return new Point(0, 0);
     }
 }
