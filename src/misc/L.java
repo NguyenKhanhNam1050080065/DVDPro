@@ -66,7 +66,7 @@ public class L implements Command {
 //        new L();
     }
     public static void destroy() {
-        log("L", "Logging server is closing...");
+//        log("L", "Logging server is closing...");
         singleton.main_loop.terminate();
     }
     //

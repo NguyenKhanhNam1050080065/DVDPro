@@ -98,6 +98,7 @@ public class Main {
 
     public static void main(String[] args) {
         WindowNavigator.setup();
+//        L.log("Main", WindowNavigator.getJarLoc());
         AuthWindow aw = WindowNavigator.createAuthWindow();
         if (aw == null) return;
         aw.set_adapter(new AuthWindowAdapter() {

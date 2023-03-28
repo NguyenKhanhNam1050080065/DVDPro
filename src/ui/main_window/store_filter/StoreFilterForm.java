@@ -47,7 +47,7 @@ public class StoreFilterForm extends JFrame {
             field = f; operator = op; value = val;
         }
         public StoreFilterSettings(){
-            this("stock", FirestoreQuery.Operator.GREATER_THAN, 0);
+            this("stock", FirestoreQuery.Operator.GREATER_THAN, -1);
         }
     }
     private void editSpinner(int fieldIndex){

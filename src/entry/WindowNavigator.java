@@ -6,6 +6,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.util.GregorianCalendar;
 import java.util.Scanner;
 
 import com.cycastic.javabase.auth.FirebaseAuth;
@@ -19,10 +20,13 @@ import misc.L;
 import javax.swing.*;
 
 public class WindowNavigator {
+    public static final int AUTO_SHUTDOWN = 10;
     private static final WindowNavigator singleton = new WindowNavigator();
     private Window currentMainWindow;
     private final FirebaseAuth authModule;
     private final Firestore dbModule;
+    private final CacheServer cacheServer;
+    private final CapsulesJob capsulesJob;
 
     private static String readFirebaseConfig(){
         try {
@@ -50,18 +54,35 @@ public class WindowNavigator {
             }
         }
     }
+    private void restore(){
+        cacheServer.restore();
+    }
+    private void flush(){
+//        capsulesJob.flush();
+//
+//        cacheServer.flush();
+    }
+    public static String getJarLoc() {
+        try {
+            return new File(WindowNavigator.class.getProtectionDomain().getCodeSource().getLocation()
+                    .toURI()).getPath();
+        } catch (URISyntaxException e){
+            return "";
+        }
+    }
+    public static String combinePath(String p1, String p2){
+        File f1 = new File(p1);
+        File f2 = new File(f1, p2);
+        return f2.getPath();
+    }
     public WindowNavigator(){
         authModule = new FirebaseAuth();
-        dbModule = new Firestore();
+        dbModule = new Firestore(true);
+        cacheServer = new CacheServer(combinePath(getJarLoc(), "cache.bin"));
+        restore();
+
+        capsulesJob = new CapsulesJob(cacheServer);
     }
-//    public static String getJarLoc() {
-//        try {
-//            return new File(WindowNavigator.class.getProtectionDomain().getCodeSource().getLocation()
-//                .toURI()).getPath();
-//        } catch (URISyntaxException e){
-//            return "";
-//        }
-//    }
     public static void setup(){
         FlatDarculaLaf.setup();
         String cfg = readFirebaseConfig();
@@ -75,13 +96,29 @@ public class WindowNavigator {
         db().enrollConfig(config);
     }
     public static void shutdown(){
+        Thread shutdownDaemon = new Thread(() -> {
+            long epoch = new GregorianCalendar().getTime().getTime();
+            while (true){
+                try {
+                    Thread.sleep(100);
+                    long now = new GregorianCalendar().getTime().getTime();
+                    if ((now - epoch) / 1000L >= AUTO_SHUTDOWN)
+                        System.exit(0);
+                } catch (InterruptedException ignored) {}
+            }
+        });
+        shutdownDaemon.setDaemon(true);
+        shutdownDaemon.start();
         L.log("WindowNavigator", "Shutdown timer has started");
+        singleton.flush();
         auth().terminate();
         db().terminate();
         L.destroy();
     }
     public static FirebaseAuth auth() { return singleton.authModule; }
     public static Firestore db() { return singleton.dbModule; }
+    public static CacheServer cache() { return singleton.cacheServer; }
+    public static CapsulesJob capsules() { return singleton.capsulesJob; }
     public static AuthWindow createAuthWindow(){
         synchronized (singleton){
             if (singleton.currentMainWindow != null) return null;

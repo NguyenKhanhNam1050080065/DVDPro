@@ -1,22 +1,29 @@
 package ui.main_window;
 
 import com.cycastic.javabase.collection.ReferencesList;
+import com.cycastic.javabase.dispatcher.SafeFlag;
 import com.cycastic.javabase.firestore.*;
 import entry.WindowNavigator;
+import misc.L;
+import models.*;
 import ui.auth_window.user_create.UserCreateForm;
-import ui.main_window.rent_checkout.RentCheckout;
+import ui.main_window.management_tools.AddDVD;
+import ui.main_window.management_tools.DVDInfoViewer;
+import ui.main_window.management_tools.LedgerViewer;
+import ui.main_window.management_tools.VendorsViewer;
 import ui.main_window.store_filter.StoreFilterForm;
 
-import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.net.URL;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
 
@@ -64,34 +71,49 @@ public class MainWindow extends JFrame {
     private JButton b_refresh;
     private JButton filter0;
     private JButton filter1;
-    private JScrollPane scroll_pane_2;
-    private JLabel user_pfp;
-    private JTextField uf_username;
-    private JTextField uf_email;
-    private JTextField uf_dob;
-    private JLabel u_capsule;
-    private JLabel u_name;
-    private JLabel u_duration;
-    private JLabel u_year;
-    private JButton ub_return;
-    private JTextField uf_rented;
-    private JPanel up_renting;
-    private JLabel ul_renting;
+    private JButton b_vendors;
+    private JList<String> transactionList;
+    private JRadioButton rb_time;
+    private JRadioButton rb_type;
+    private JRadioButton rb_amount;
+    private JButton b_transaction_sort;
+    private JScrollPane transactionScrollPane;
+    private JCheckBox cb_ascending;
+    private JButton b_add_dvd;
+    private ButtonGroup bg;
 
     public static final Dimension WINDOW_SIZE  = new Dimension(900, 400);
-    public static final Dimension CAPSULE_SIZE = new Dimension(195, 285);
+    public static final Dimension CAPSULE_SIZE = new Dimension(200, 300);
     public static final Dimension PFP_SIZE = new Dimension(200, 200);
 
-    private final List<FirestoreDocument> dvd_list = new ArrayList<>();
+    private final List<DVDModel> dvd_models = new ArrayList<>();
     private FirestoreDocument user_profile = null;
     private final List<Image> capsule_list = new ArrayList<>();
     private int store_current_page = 1;
     private int store_max_page = 0;
     private final ReferencesList<StoreFilterForm.StoreFilterSettings> filters;
+    private final DefaultListModel<String> transactionModel;
+    private final java.util.List<LedgerModel> transactionIds = new ArrayList<>();
     private final Object storeRefreshSynchronizer = new Object();
     private final Object userRefreshSynchronizer = new Object();
     private final Object rentHandlerSynchronizer = new Object();
+    private final Object transactionListLock = new Object();
     private final Object filtersLock = new Object();
+    private final SafeFlag isAdmin = new SafeFlag(false);
+
+    private void createUIComponents() {
+        // TODO: place custom component creation code here
+        transactionList = new JList<>(new DefaultListModel<>());
+        bg = new ButtonGroup();
+        rb_amount = new JRadioButton();
+        rb_time = new JRadioButton();
+        rb_type = new JRadioButton();
+        bg.add(rb_amount);
+        bg.add(rb_time);
+        bg.add(rb_type);
+        rb_time.setSelected(true);
+    }
+
     private class StoreRefreshHandler {
         private final MainWindow mw;
         public StoreRefreshHandler(MainWindow mw){
@@ -99,52 +121,46 @@ public class MainWindow extends JFrame {
         }
         public void run(){
             synchronized (storeRefreshSynchronizer) {
-                mw.lock_input();
-                dvd_list.clear();
+                mw.lockInput();
+                dvd_models.clear();
                 capsule_list.clear();
-                FirestoreQuery fetch_list = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY).from("dvds_info");
-                filters.forEach(storeFilterElement -> {
-                    if (storeFilterElement.getValue() != null)
-                        fetch_list.where(storeFilterElement.getValue().field, storeFilterElement.getValue().operator,
-                                storeFilterElement.getValue().value);
+                //-------------------------------------------------------
+                DVDCollection collection = new DVDCollection(WindowNavigator.db(), true).setRead();
+                filters.forEach(storeFilterSettingsElement -> {
+                    if (storeFilterSettingsElement.getValue() != null)
+                        collection.getBaseQuery().where(storeFilterSettingsElement.getValue().field,
+                                storeFilterSettingsElement.getValue().operator, storeFilterSettingsElement.getValue().value);
                 });
+                collection.getBaseQuery().orderBy("stock", FirestoreQuery.Direction.DESCENDING);
                 update_store_page(0);
-                WindowNavigator.db().query(fetch_list, new FirestoreTaskReceiver() {
-                    @Override
-                    public void connectionFailed() {
-                        JOptionPane.showMessageDialog(mw, "Không thể kết nối đến máy chủ Firestore. Hãy kiểm tra lại kết nối internet");
-                        mw.unlock_input();
+                try{
+                    Map<String, DVDModel> dvds = collection.getDocuments();
+                    for (Map.Entry<String, DVDModel> E : dvds.entrySet()){
+                        dvd_models.add(E.getValue());
                     }
-                    @Override
-                    public void requestFailed(int i, Map<String, String> map, String s) {
-                        JOptionPane.showMessageDialog(mw, "Đã xảy ra lỗi khi tìm kiếm thông tin. Xin hãy liên hệ cho Khánh Nam.");
-                        mw.unlock_input();
-                    }
-                    @Override
-                    public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                        synchronized (storeRefreshSynchronizer) {
-                            for (Map.Entry<String, FirestoreDocument> E : firestoreTaskResult.getDocuments().entrySet()){
-                                FirestoreDocument doc = E.getValue();
-                                dvd_list.add(doc);
-                            }
-                            update_store_data_text(1);
-                            for (FirestoreDocument doc : dvd_list){
-                                try {
-                                    URL capsule_url = new URL(doc.getFields().get("capsule_art").toString());
-                                    BufferedImage img = ImageIO.read(capsule_url);
-                                    capsule_list.add(img.getScaledInstance(CAPSULE_SIZE.width, CAPSULE_SIZE.height, Image.SCALE_SMOOTH));
-                                } catch (IOException e){
-                                    capsule_list.add(null);
-                                }
-                            }
-                            int total = dvd_list.size() / 5;
-                            store_max_page = (dvd_list.size() - (total * 5)) > 0 ? total + 1 : total;
-                            update_store_page(1);
-        //                    update_store_capsules(1);
-                            mw.unlock_input();
+                    update_store_data_text(1);
+                    for (DVDModel doc : dvd_models){
+                        String capsuleLink = doc.getCapsuleArt();
+                        BufferedImage img = WindowNavigator.capsules().fetch(capsuleLink);
+                        if (img == null){
+                            capsule_list.add(null);
+                        } else {
+                            capsule_list.add(img.getScaledInstance(CAPSULE_SIZE.width, CAPSULE_SIZE.height, Image.SCALE_SMOOTH));
                         }
                     }
-                });
+                    int total = dvd_models.size() / 5;
+                    store_max_page = (dvd_models.size() - (total * 5)) > 0 ? total + 1 : total;
+                    update_store_page(1);
+                } catch (FirestoreModelException e){
+                    if (e.getClass() == NoConnectionException.class){
+                        JOptionPane.showMessageDialog(mw, "Không thể kết nối đến máy chủ Firestore. Hãy kiểm tra lại kết nối internet");
+                    } else if (e.getClass() == QueryRefusedException.class){
+                        JOptionPane.showMessageDialog(mw, "Đã xảy ra lỗi khi tìm kiếm thông tin. Xin hãy liên hệ cho Khánh Nam.");
+                    }
+                    L.log("MainWindow", e.toString());
+                } finally {
+                    mw.unlockInput();
+                }
             }
         }
     }
@@ -154,6 +170,7 @@ public class MainWindow extends JFrame {
             this.mw = mw;
         }
         public void run(){
+
             String uid = WindowNavigator.auth().getAuthWrapper().getAuthToken().getLocalId();
             FirestoreQuery fetchUser = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
                     .from("users").where("uid", FirestoreQuery.Operator.EQUAL, uid).relate(FirestoreQuery.Operator.AND);
@@ -172,71 +189,38 @@ public class MainWindow extends JFrame {
                         Map<String, FirestoreDocument> docs = firestoreTaskResult.getDocuments();
                         for (Map.Entry<String, FirestoreDocument> E : docs.entrySet()){
                             user_profile = E.getValue();
-                            Date dob = UserCreateForm.unixToDate((Long)user_profile.getFields().get("dob"));
-                            uf_username.setText(user_profile.getFields().get("username").toString());
-                            uf_dob.setText(String.valueOf(UserCreateForm.getAgeByDob(dob)));
-                            uf_rented.setText(user_profile.getFields().get("rented").toString());
-                            try {
-                                URL pfp_url = new URL(user_profile.getFields().get("pfp").toString());
-                                BufferedImage img = ImageIO.read(pfp_url);
-                                Image avatar = img.getScaledInstance(PFP_SIZE.width, PFP_SIZE.height, Image.SCALE_SMOOTH);
-                                user_pfp.setIcon(new ImageIcon(avatar));
-                            } catch (Exception ignored) {}
-                            //-----------------------------------------------------
-                            String renting_imdb_link = user_profile.getFields().get("renting").toString();
-                            if (renting_imdb_link.isEmpty()) {
-                                update_store_component(null, up_renting, u_name, u_duration, u_year);
-                                update_store_panel(u_capsule, null);
-                                ul_renting.setVisible(true);
-                                break;
-                            }
-                            FirestoreQuery fetch_renting_metadata = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
-                                    .from("dvds_info").where("imdb_link", FirestoreQuery.Operator.EQUAL, renting_imdb_link);
-                            WindowNavigator.db().query(fetch_renting_metadata, new FirestoreTaskReceiver() {
+                            //-------------------------------------------------------------------------------------
+                            final SafeFlag is_mod_fetch_finished = new SafeFlag(false);
+                            FirestoreQuery fetch_moderation_status = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
+                                    .from("users_status").where("uid", FirestoreQuery.Operator.EQUAL, user_profile.getFields().get("uid").toString());
+                            WindowNavigator.db().query(fetch_moderation_status, new FirestoreTaskReceiver() {
                                 @Override
                                 public void connectionFailed() {
-                                    update_store_component(null, up_renting, u_name, u_duration, u_year);
-                                    update_store_panel(u_capsule, null);
-                                    ul_renting.setVisible(true);
-                                    JOptionPane.showMessageDialog(mw, "Không có kết nối mạng");
+                                    isAdmin.clear();
+                                    is_mod_fetch_finished.set();
                                 }
                                 @Override
                                 public void requestFailed(int i, Map<String, String> map, String s) {
-                                    update_store_component(null, up_renting, u_name, u_duration, u_year);
-                                    update_store_panel(u_capsule, null);
-                                    ul_renting.setVisible(true);
-                                    JOptionPane.showMessageDialog(mw, "Yêu cầu thất bại. Không thể tìm thấy DVD đang thuê");
+                                    isAdmin.clear();
+                                    is_mod_fetch_finished.set();
                                 }
                                 @Override
                                 public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                                    Map<String, FirestoreDocument> docs = firestoreTaskResult.getDocuments();
-                                    FirestoreDocument dvd_metadata = null;
-                                    for (Map.Entry<String, FirestoreDocument> E : docs.entrySet()){
-                                        dvd_metadata = E.getValue();
-                                        break;
-                                    }
-                                    if (dvd_metadata == null){
-                                        update_store_component(null, up_renting, u_name, u_duration, u_year);
-                                        update_store_panel(u_capsule, null);
-                                        ul_renting.setVisible(true);
-                                        return;
-                                    }
-                                    final FirestoreDocument doc = dvd_metadata;
-                                    new Thread(() -> {
-                                        try {
-                                            URL capsule_url = new URL(doc.getFields().get("capsule_art").toString());
-                                            BufferedImage img = ImageIO.read(capsule_url);
-                                            update_store_panel(u_capsule, img.getScaledInstance(CAPSULE_SIZE.width, CAPSULE_SIZE.height, Image.SCALE_SMOOTH));
-                                        } catch (Exception ignored){
-                                            update_store_panel(u_capsule, null);
+                                    if (firestoreTaskResult.getDocuments().isEmpty()) isAdmin.clear();
+                                    else {
+                                        for (Map.Entry<String, FirestoreDocument> E : firestoreTaskResult.getDocuments().entrySet()){
+                                            if ((Boolean) E.getValue().getFields().get("isAdmin")){
+                                                isAdmin.set();
+                                            } else isAdmin.clear();
+                                            break;
                                         }
-                                    }).start();
-                                    ul_renting.setVisible(false);
-                                    update_store_component(dvd_metadata, up_renting, u_name, u_duration, u_year);
+                                    }
+                                    is_mod_fetch_finished.set();
+//                                    uf_moderation.setText(String.valueOf(isAdmin.get()));
+                                    //-------------------------------------------------------------------------------------
                                 }
                             });
-
-                            // Người dùng với uid đã cho chỉ có 1
+                            is_mod_fetch_finished.waitToFinish();
                             break;
                         }
                     }
@@ -244,13 +228,13 @@ public class MainWindow extends JFrame {
             });
         }
     }
-    private class RentHandler {
+    private class DetailHandler {
         private final MainWindow mw;
-        public RentHandler(MainWindow mw){
+        public DetailHandler(MainWindow mw){
             this.mw = mw;
         }
         public void run(int idx){
-            if (dvd_list.isEmpty()) return;
+            if (dvd_models.isEmpty()) return;
             final FirestoreDocument pf_doc;
             synchronized (userRefreshSynchronizer){
                 if (user_profile == null){
@@ -261,64 +245,26 @@ public class MainWindow extends JFrame {
                     pf_doc = user_profile;
                 }
             }
-            mw.lock_input();
+            mw.lockInput();
             final int anchor_index = (store_current_page - 1) * 5;
             final int curr = anchor_index + idx;
             new Thread(() -> {
                 synchronized (rentHandlerSynchronizer){
-                    FirestoreDocument doc = dvd_list.get(curr);
+                    DVDModel doc = dvd_models.get(curr);
                     Image capsule = capsule_list.get(curr);
-                    String imdb_link = doc.getFields().get("imdb_link").toString();
-                    if (Objects.equals(imdb_link, pf_doc.getFields().get("renting"))) {
-                        JOptionPane.showMessageDialog(mw, "Bạn đã thuê DVD này!");
-                        mw.unlock_input();
-                        return;
-                    }
+                    String imdb_link = doc.getImdbLink();
+                    String uid = pf_doc.getFields().get("uid").toString();
                     int age = UserCreateForm.getAgeByDob(UserCreateForm.unixToDate((Long)pf_doc.getFields().get("dob")));
-                    boolean has_rented = !(pf_doc.getFields().get("renting").toString().isEmpty());
-                    boolean accepted = new RentCheckout(doc, capsule, has_rented).run();
-                    if (!accepted) {
-                        mw.unlock_input();
-                        return;
-                    }
-                    if (age < (Long)doc.getFields().get("rated_age")) {
-                        JOptionPane.showMessageDialog(mw, "Bạn không đủ tuổi để thuê phim này.");
-                        mw.unlock_input();
-                        return;
-                    }
-                    long rented = (Long)pf_doc.getFields().get("rented");
-                    Map<String, Object> update_content = new HashMap<>();
-                    update_content.put("renting", imdb_link);
-                    update_content.put("rented", rented + 1);
-                    FirestoreQuery patch_renting = new FirestoreQuery(FirestoreQuery.QueryType.PATCH_DOCUMENT)
-                            .onCollection("users").onDocument(pf_doc.getFields().get("uid").toString())
-                            .update(update_content).documentExisted(true).updateMask("renting")
-                            .updateMask("rented");
-                    WindowNavigator.db().query(patch_renting, new FirestoreTaskReceiver() {
-                        @Override
-                        public void connectionFailed() {
-                            JOptionPane.showMessageDialog(mw, "Không thể thuê được DVD: Kết nối thất bại");
-                            mw.unlock_input();
-                        }
-                        @Override
-                        public void requestFailed(int i, Map<String, String> map, String s) {
-                            JOptionPane.showMessageDialog(mw, "Không thể thuê được DVD: Yêu cầu thất bại");
-                            mw.unlock_input();
-                        }
-
-                        @Override
-                        public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                            JOptionPane.showMessageDialog(mw, "Thuê DVD thành công");
-                            mw.unlock_input();
-                            new UserRefreshHandler(mw).run();
-                        }
-                    });
+                    final DVDInfoViewer rc = new DVDInfoViewer(doc, capsule, isAdmin.get());
+                    boolean accepted = rc.run();
+                    final boolean modified = rc.isModified();
+                    mw.unlockInput();
                 }
             }).start();
-//            mw.unlock_input();
         }
     }
 
+    @Deprecated
     static private void update_store_component(FirestoreDocument doc, JPanel host, JLabel title, JLabel duration, JLabel year){
         if (doc == null || doc.getFields().isEmpty()) {
             title.setText("");
@@ -348,6 +294,32 @@ public class MainWindow extends JFrame {
             host.setVisible(true);
         }
     }
+    static private void updateStoreComponent(DVDModel doc, JPanel host, JLabel title, JLabel duration, JLabel year){
+        if (doc == null){
+            title.setText("");
+            duration.setText("");
+            year.setText("");
+            host.setVisible(false);
+            return;
+        }
+        String duration_txt = "%dh %dm"; long _f, _h, _m;
+        String rating_text  = "%s-%d"; long rated_age = doc.getRatedAge();
+        _f = doc.getDuration();
+        _h = _f / 60;
+        _m = _f - (60 * _h);
+        StringBuilder category_str = new StringBuilder();
+        List<String> _category = (doc.getCategory());
+        for (int i = 0, s = _category.size(); i < s && i < 2; i++){
+            if (i > 0) category_str.append(" • ");
+            category_str.append(_category.get(i));
+        }
+        title.setText(doc.getName());
+        duration.setText(duration_txt.formatted(_h, _m) + " | "
+                + rating_text.formatted(doc.getRatedAge(), rated_age)
+                + " | " + doc.getYear());
+        year.setText(category_str.toString());
+        host.setVisible(true);
+    }
     static private void update_store_panel(JLabel capsule, Image capsule_img){
         if (capsule_img == null) {
             capsule.setIcon(new ImageIcon());
@@ -356,9 +328,9 @@ public class MainWindow extends JFrame {
             capsule.setIcon(new ImageIcon(capsule_img));
         }
     }
-    private FirestoreDocument get_dvd_info(int index){
-        if (index >= dvd_list.size() || index < 0) return null;
-        return dvd_list.get(index);
+    private DVDModel get_dvd_model(int index){
+        if (index >= dvd_models.size() || index < 0) return null;
+        return dvd_models.get(index);
     }
     private Image get_capsule(int index){
         if (index >= capsule_list.size() || index < 0) return null;
@@ -367,31 +339,31 @@ public class MainWindow extends JFrame {
     private void update_store_data_text(int new_page){
         int relative_index = 0, curr;
         int anchor_index = (new_page - 1) * 5;
-        FirestoreDocument doc;
+        DVDModel doc;
 
         curr = anchor_index + relative_index;
-        doc = get_dvd_info(curr);
-        update_store_component(doc, c0, lc_name0, lc__dur0, lc_year0);
+        doc = get_dvd_model(curr);
+        updateStoreComponent(doc, c0, lc_name0, lc__dur0, lc_year0);
         relative_index +=1 ;
 
         curr = anchor_index + relative_index;
-        doc = get_dvd_info(curr);
-        update_store_component(doc, c1, lc_name1, lc__dur1, lc_year1);
+        doc = get_dvd_model(curr);
+        updateStoreComponent(doc, c1, lc_name1, lc__dur1, lc_year1);
         relative_index +=1 ;
 
         curr = anchor_index + relative_index;
-        doc = get_dvd_info(curr);
-        update_store_component(doc, c2, lc_name2, lc__dur2, lc_year2);
+        doc = get_dvd_model(curr);
+        updateStoreComponent(doc, c2, lc_name2, lc__dur2, lc_year2);
         relative_index +=1 ;
 
         curr = anchor_index + relative_index;
-        doc = get_dvd_info(curr);
-        update_store_component(doc, c3, lc_name3, lc__dur3, lc_year3);
+        doc = get_dvd_model(curr);
+        updateStoreComponent(doc, c3, lc_name3, lc__dur3, lc_year3);
         relative_index +=1 ;
 
         curr = anchor_index + relative_index;
-        doc = get_dvd_info(curr);
-        update_store_component(doc, c4, lc_name4, lc__dur4, lc_year4);
+        doc = get_dvd_model(curr);
+        updateStoreComponent(doc, c4, lc_name4, lc__dur4, lc_year4);
 
 
         l_sf_page_count.setText("%d/%d".formatted(new_page, store_max_page));
@@ -412,16 +384,18 @@ public class MainWindow extends JFrame {
     }
 
     private void fetch_dvd_list(){
-        new StoreRefreshHandler(this).run();
+        new Thread(()-> new StoreRefreshHandler(this).run()).start();
     }
     private void fetch_user_info(){
         new UserRefreshHandler(this).run();
     }
-    private void rent_at(int index){
-        new RentHandler((this)).run(index);
+    private void viewDetailAt(int index){
+        new DetailHandler((this)).run(index);
     }
 
-    public void change_input(boolean state){
+    public void changeInputState(boolean state){
+        b_vendors.setEnabled(state && isAdmin.get());
+        b_add_dvd.setEnabled(state && isAdmin.get());
         b_next.setEnabled(state);
         b_prev.setEnabled(state);
         bc_0.setEnabled(state);
@@ -433,12 +407,20 @@ public class MainWindow extends JFrame {
         filter0.setEnabled(state);
 //        filter1.setEnabled(state);
     }
-
-    public void lock_input(){
-        change_input(false);
+    public void changeTransactionListState(boolean state){
+        transactionList.setEnabled(state);
+        rb_amount.setEnabled(state);
+        rb_type.setEnabled(state);
+        rb_time.setEnabled(state);
+        cb_ascending.setEnabled(state);
+        b_transaction_sort.setEnabled(state);
     }
-    public void unlock_input(){
-        change_input(true);
+
+    public void lockInput(){
+        changeInputState(false);
+    }
+    public void unlockInput(){
+        changeInputState(true);
     }
 
     private static int clamp(int val, int min, int max){
@@ -446,7 +428,6 @@ public class MainWindow extends JFrame {
     }
     private boolean isUpdatingFilters = false;
     private void addFilter(int index, JButton bFilter){
-
         StoreFilterForm.StoreFilterSettings settings = new StoreFilterForm(index).getFilterSettings();
         if (Objects.equals(settings.field, "stock")) return;
         if (Objects.equals(settings.field, "category")) {
@@ -480,14 +461,64 @@ public class MainWindow extends JFrame {
         if (isUpdatingFilters) return;
         new Thread(() -> {
             synchronized (filtersLock){
+                lockInput();
                 isUpdatingFilters = true;
                 if (Objects.equals(bFilter.getText(), "+")) addFilter(index, bFilter);
                 else removeFilter(index, bFilter);
                 isUpdatingFilters = false;
+                unlockInput();
             }
         }).start();
     }
+    private void refreshTransactionList(){
+        synchronized (transactionListLock){
+            changeTransactionListState(false);
+            transactionModel.clear();
+            transactionIds.clear();
+        }
+        new Thread(() -> {
+            synchronized (transactionListLock){
+                final int selectedFilter;
+                if (rb_type.isSelected()) selectedFilter = 1;
+                else if (rb_amount.isSelected()) selectedFilter = 2;
+                else selectedFilter = 0;
+                FirestoreQuery getTransactions = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
+                        .from("ledger")
+                        .orderBy(selectedFilter == 2 ? "amount" : selectedFilter == 1 ? "isInput" : "time", cb_ascending.isSelected() ? FirestoreQuery.Direction.ASCENDING : FirestoreQuery.Direction.DESCENDING);
+                LedgerCollection ledgerCollection = new LedgerCollection(WindowNavigator.db(), true, getTransactions);
+                try {
+                    Map<String, LedgerModel> ledger = ledgerCollection.getDocuments();
+                    for (Map.Entry<String, LedgerModel> E : ledger.entrySet()){
+                        LedgerModel model = E.getValue();
+                        LocalDateTime transactionTime = LocalDateTime.ofInstant(Instant.ofEpochSecond(model.getTime()), ZoneId.systemDefault());
+                        final String textDisplay = "%s %d sản phẩm vào %s".formatted(model.getInput() ? "Nhập kho" : "Xuất kho", model.getAmount(), transactionTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                        transactionModel.addElement(textDisplay);
+                        transactionIds.add(model);
+                    }
+                } catch (FirestoreModelException ex){
+                    if (ex.getClass() == NoConnectionException.class){
+                        JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Không có kết nối Internet");
+                    } else if (ex.getClass() == QueryRefusedException.class){
+                        JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Yêu cầu bị từ chối");
+                    }
+                    L.log("MainWindow", "Transaction request failed: %s".formatted(ex.toString()));
+                }
 
+                changeTransactionListState(true);
+            }
+        }).start();
+    }
+    private void viewTransaction(){
+        new Thread(() -> {
+            synchronized (transactionListLock){
+                int idx = transactionList.getSelectedIndex();
+                if (idx == -1) return;
+                changeTransactionListState(false);
+                new LedgerViewer(transactionIds.get(idx)).run();
+                changeTransactionListState(true);
+            }
+        }).start();
+    }
     public MainWindow(){
         super("Thuê DVD OwO");
 
@@ -497,7 +528,7 @@ public class MainWindow extends JFrame {
         setSize(WINDOW_SIZE);
         setMinimumSize(WINDOW_SIZE);
         main_scroll_pane.getVerticalScrollBar().setUnitIncrement(16);
-        scroll_pane_2.getVerticalScrollBar().setUnitIncrement(16);
+        transactionScrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
         MainWindow mw = this;
         filters = new ReferencesList<>();
@@ -505,6 +536,9 @@ public class MainWindow extends JFrame {
         for (int i = 0; i < 2; i++){
             filters.pushBack(null);
         }
+
+        transactionModel = (DefaultListModel<String>) transactionList.getModel();
+        refreshTransactionList();
 
         addWindowListener(new WindowAdapter() {
             @Override
@@ -520,6 +554,17 @@ public class MainWindow extends JFrame {
             store_current_page = clamp(store_current_page + 1, 1, store_max_page);
             update_store_page(store_current_page);
         });
+        b_vendors.addActionListener(e -> new Thread(() -> {
+            lockInput();
+            new VendorsViewer().run();
+            unlockInput();
+        }).start());
+        b_add_dvd.addActionListener(e -> new Thread(() -> {
+            lockInput();
+            new AddDVD(false, null).run();
+            unlockInput();
+        }).start());
+        b_transaction_sort.addActionListener(e -> refreshTransactionList());
         b_refresh.addActionListener(e -> fetch_dvd_list());
         filter0.addActionListener(e -> {
             filterHandler(0, filter0);
@@ -530,51 +575,25 @@ public class MainWindow extends JFrame {
         fetch_dvd_list();
         fetch_user_info();
         bc_0.addActionListener(e -> {
-            rent_at(0);
+            viewDetailAt(0);
         });
         bc_1.addActionListener(e -> {
-            rent_at(1);
+            viewDetailAt(1);
         });
         bc_2.addActionListener(e -> {
-            rent_at(2);
+            viewDetailAt(2);
         });
         bc_3.addActionListener(e -> {
-            rent_at(3);
+            viewDetailAt(3);
         });
         bc_4.addActionListener(e -> {
-            rent_at(4);
+            viewDetailAt(4);
         });
-        ub_return.addActionListener(e -> {
-            int ret = JOptionPane.showConfirmDialog(mw, "Xác nhận trả đĩa?");
-            if (ret != JOptionPane.YES_OPTION) return;
-            final FirestoreDocument pf_doc;
-            synchronized (userRefreshSynchronizer){
-                pf_doc = user_profile;
+        transactionList.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) viewTransaction();
             }
-            if (pf_doc == null){
-                JOptionPane.showMessageDialog(mw, "Không thể đọc được cài đặt người dùng");
-                return;
-            }
-            Map<String, Object> update_content = new HashMap<>();
-            update_content.put("renting", "");
-            FirestoreQuery return_query = new FirestoreQuery(FirestoreQuery.QueryType.PATCH_DOCUMENT)
-                    .onCollection("users").onDocument(pf_doc.getFields().get("uid").toString())
-                    .update(update_content).documentExisted(true).updateMask("renting");
-            WindowNavigator.db().query(return_query, new FirestoreTaskReceiver() {
-                @Override
-                public void connectionFailed() {
-                    JOptionPane.showMessageDialog(mw, "Không có kết nối Internet");
-                }
-                @Override
-                public void requestFailed(int i, Map<String, String> map, String s) {
-                    JOptionPane.showMessageDialog(mw, "Trả đĩa không thành công");
-                }
-                @Override
-                public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                    JOptionPane.showMessageDialog(mw, "Trả đĩa thành công");
-                    new UserRefreshHandler(mw).run();
-                }
-            });
         });
     }
 }
