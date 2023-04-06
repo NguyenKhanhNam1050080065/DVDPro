@@ -1,5 +1,6 @@
 package ui.main_window.management_tools;
 
+import com.cycastic.javabase.dispatcher.AsyncEngine;
 import com.cycastic.javabase.dispatcher.SafeFlag;
 import entry.WindowNavigator;
 import models.DVDModel;
@@ -29,8 +30,14 @@ public class DVDInfoViewer extends JFrame {
     private final SafeFlag returnLock = new SafeFlag(false);
     private final SafeFlag modified = new SafeFlag(false);
     private final Object submitLock = new Object();
+    private final AsyncEngine engine = new AsyncEngine(AsyncEngine.MODE_HOT);
     private final boolean isAdmin;
     private boolean result = false;
+    private void finisher(){
+        engine.terminate();
+        returnLock.set();
+        dispose();
+    }
     public void changeInputState(boolean state){
         b_input.setEnabled(state);
         b_output.setEnabled(state);
@@ -83,45 +90,33 @@ public class DVDInfoViewer extends JFrame {
         f_stock.setText(String.valueOf(details.getStock()));
         f_year.setText(String.valueOf(details.getYear()));
         f_category.setText(category_str.toString());
-        new Thread(()-> capsule_label.setIcon(capsule_icon)).start();
+        engine.dispatch(()-> capsule_label.setIcon(capsule_icon)).start();
 
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                if (!returnLock.get()) returnLock.set();
-                rc.dispose();
+                finisher();
             }
         });
         b_return.addActionListener(e -> {
             result = false;
-            returnLock.set();
-            rc.dispose();
+            dispatchEvent(new WindowEvent(this, WindowEvent.WINDOW_CLOSING));
         });
-        b_update.addActionListener(e -> new Thread(() -> {
-            synchronized (returnLock){
-                lockInput();
-                new AddDVD(true, details).run();
-                unlockInput();
-            }
+        b_update.addActionListener(e -> engine.dispatch(() -> {
+            lockInput();
+            new AddDVD(true, details).run();
+            unlockInput();
         }).start());
-        b_input.addActionListener(e -> {
-            new Thread(() -> {
-                synchronized (submitLock){
-                    lockInput();
-                    new NewOperation(details.getImdbLink(), details.getName(), details.getDocumentName(), details.getStock(), true).run();
-                    unlockInput();
-                }
-            }).start();
-        });
-        b_output.addActionListener(e -> {
-            new Thread(() -> {
-                synchronized (submitLock){
-                    lockInput();
-                    new NewOperation(details.getImdbLink(), details.getName(), details.getDocumentName(), details.getStock(), false).run();
-                    unlockInput();
-                }
-            }).start();
-        });
+        b_input.addActionListener(e -> engine.dispatch(() -> {
+            lockInput();
+            new NewOperation(details.getImdbLink(), details.getName(), details.getDocumentName(), details.getStock(), true).run();
+            unlockInput();
+        }).start());
+        b_output.addActionListener(e -> engine.dispatch(() -> {
+            lockInput();
+            new NewOperation(details.getImdbLink(), details.getName(), details.getDocumentName(), details.getStock(), false).run();
+            unlockInput();
+        }).start());
     }
     public boolean isModified(){
         return modified.get();

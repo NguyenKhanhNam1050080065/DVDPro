@@ -1,21 +1,16 @@
 package misc;
 
-import com.cycastic.javabase.dispatcher.Command;
-import com.cycastic.javabase.dispatcher.ExecutionLoop;
+import com.cycastic.javabase.dispatcher.AsyncEngine;
 
-public class L implements Command {
+public class L {
     private static  final int type_sep_len = 25;
     private static final boolean verbose = true;
     private static final boolean error = true;
-    private static final Object lock = new Object();
-
-    private static L singleton = new L();
-    private ExecutionLoop main_loop;
+    private static final L singleton = new L();
+    private final AsyncEngine engine;
 
     public L(){
-        if (singleton != null) return;
-        singleton = this;
-        main_loop = new ExecutionLoop();
+        engine = new AsyncEngine(AsyncEngine.MODE_HOT);
     }
 
     private static String build_type(String type){
@@ -36,54 +31,33 @@ public class L implements Command {
         String writable = message.replace("\t", "    ").replace('\n', ' ');
         StringBuilder pads = new StringBuilder();
         pads.append(" ".repeat(Math.max(0, padding)));
-        writable = pads.toString() + writable + pads.toString();
+        writable = pads + writable + pads;
         StringBuilder separators = new StringBuilder();
         separators.append("/".repeat(writable.length()));
-        synchronized (lock){
-            System.err.printf("%n///%s///%n///%s///%n///%s///%n%n", separators, writable, separators);
-        }
-    }
-    @Override
-    public void exec(Object... params) {
-        String method = params[0].toString();
-        switch (method){
-            case "_log" -> {
-                _log(params[1].toString(), params[2].toString());
-            }
-            case "_err" -> {
-                _err(params[1].toString(), params[2].toString());
-            }
-            case "_decorate" -> {
-                _decorate(params[1].toString(), (Integer)params[2]);
-            }
-            default -> {
-                _log("L", "Unsupported command");
-            }
-        }
+        System.err.printf("%n///%s///%n///%s///%n///%s///%n%n", separators, writable, separators);
     }
     @Deprecated(since = "0.7")
     public static void init() {
 //        new L();
     }
     public static void destroy() {
-//        log("L", "Logging server is closing...");
-        singleton.main_loop.terminate();
+        singleton.engine.terminate();
     }
     //
     // Màu mè hóa việc logging :v
     //
     public static void log(String type, String message) {
         if (!verbose) return;
-        singleton.main_loop.push(singleton, "_log", type, message);
+        singleton.engine.dispatch(() -> singleton._log(type, message));
     }
     public static void err(String type, String message) {
         if (!error) return;
-        singleton.main_loop.push(singleton, "_err", type, message);
+        singleton.engine.dispatch(() -> singleton._err(type, message));
     }
     public static void decorate(String message, int padding) {
-        singleton.main_loop.push(singleton, "_decorate", message, padding);
+        singleton.engine.dispatch(() -> singleton._decorate(message, padding));
     }
     public static void decorate(String message) {
-        singleton.main_loop.push(singleton, "_decorate", message, 4);
+        decorate(message, 4);
     }
 }

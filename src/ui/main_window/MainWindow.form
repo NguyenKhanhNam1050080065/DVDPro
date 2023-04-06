@@ -794,7 +794,9 @@
                         <children>
                           <component id="5a6c7" class="javax.swing.JList" binding="transactionList" custom-create="true">
                             <constraints/>
-                            <properties/>
+                            <properties>
+                              <font size="14"/>
+                            </properties>
                           </component>
                         </children>
                       </scrollpane>

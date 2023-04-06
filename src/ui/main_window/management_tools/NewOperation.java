@@ -126,7 +126,8 @@ public class NewOperation extends JFrame {
     }
     private void afterEvent(Runnable event){
         if (!returnLock.get()) returnLock.set();
-        new Thread(this::dispose).start();
+//        new Thread(this::dispose).start();
+        dispose();
         if (event != null) event.run();
     }
     public NewOperation(String imdbLink, String dvdTitle, String dvdId, long stock, boolean isInput){
@@ -154,9 +155,7 @@ public class NewOperation extends JFrame {
             }
         });
         b_return.addActionListener(e -> {
-            synchronized (this){
-                dispatchEvent(new WindowEvent(this, WindowEvent.WINDOW_CLOSING));
-            }
+            dispatchEvent(new WindowEvent(this, WindowEvent.WINDOW_CLOSING));
         });
         b_accept.addActionListener(e -> {
             new Thread(()-> {

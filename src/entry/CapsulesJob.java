@@ -12,7 +12,11 @@ public class CapsulesJob {
     public final int CACHE_SIZE = 30;
     private final CacheServer cacheServer;
     private final Map<String, BufferedImage> cachedCapsules;
-
+    public void batchFetch(String[] urls){
+        new Thread(() -> {
+            for (String url : urls) fetch(url);
+        }).start();
+    }
     public BufferedImage fetch(String url){
         BufferedImage re;
         synchronized (this){

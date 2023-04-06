@@ -1,12 +1,12 @@
 package ui.main_window;
 
 import com.cycastic.javabase.collection.ReferencesList;
+import com.cycastic.javabase.dispatcher.AsyncEngine;
 import com.cycastic.javabase.dispatcher.SafeFlag;
 import com.cycastic.javabase.firestore.*;
 import entry.WindowNavigator;
 import misc.L;
 import models.*;
-import ui.auth_window.user_create.UserCreateForm;
 import ui.main_window.management_tools.AddDVD;
 import ui.main_window.management_tools.DVDInfoViewer;
 import ui.main_window.management_tools.LedgerViewer;
@@ -80,11 +80,11 @@ public class MainWindow extends JFrame {
     private JScrollPane transactionScrollPane;
     private JCheckBox cb_ascending;
     private JButton b_add_dvd;
-    private ButtonGroup bg;
 
     public static final Dimension WINDOW_SIZE  = new Dimension(900, 400);
     public static final Dimension CAPSULE_SIZE = new Dimension(200, 300);
     public static final Dimension PFP_SIZE = new Dimension(200, 200);
+    public static final int CAPSULE_FETCH_TIME = 5;
 
     private final List<DVDModel> dvd_models = new ArrayList<>();
     private FirestoreDocument user_profile = null;
@@ -94,17 +94,14 @@ public class MainWindow extends JFrame {
     private final ReferencesList<StoreFilterForm.StoreFilterSettings> filters;
     private final DefaultListModel<String> transactionModel;
     private final java.util.List<LedgerModel> transactionIds = new ArrayList<>();
-    private final Object storeRefreshSynchronizer = new Object();
-    private final Object userRefreshSynchronizer = new Object();
-    private final Object rentHandlerSynchronizer = new Object();
-    private final Object transactionListLock = new Object();
-    private final Object filtersLock = new Object();
     private final SafeFlag isAdmin = new SafeFlag(false);
+    private final AsyncEngine engine0 = new AsyncEngine(AsyncEngine.MODE_HOT);
+    private final AsyncEngine engine1 = new AsyncEngine(AsyncEngine.MODE_HOT);
 
     private void createUIComponents() {
         // TODO: place custom component creation code here
         transactionList = new JList<>(new DefaultListModel<>());
-        bg = new ButtonGroup();
+        ButtonGroup bg = new ButtonGroup();
         rb_amount = new JRadioButton();
         rb_time = new JRadioButton();
         rb_type = new JRadioButton();
@@ -120,48 +117,66 @@ public class MainWindow extends JFrame {
             this.mw = mw;
         }
         public void run(){
-            synchronized (storeRefreshSynchronizer) {
-                mw.lockInput();
-                dvd_models.clear();
-                capsule_list.clear();
-                //-------------------------------------------------------
-                DVDCollection collection = new DVDCollection(WindowNavigator.db(), true).setRead();
-                filters.forEach(storeFilterSettingsElement -> {
-                    if (storeFilterSettingsElement.getValue() != null)
-                        collection.getBaseQuery().where(storeFilterSettingsElement.getValue().field,
-                                storeFilterSettingsElement.getValue().operator, storeFilterSettingsElement.getValue().value);
-                });
-                collection.getBaseQuery().orderBy("stock", FirestoreQuery.Direction.DESCENDING);
-                update_store_page(0);
-                try{
-                    Map<String, DVDModel> dvds = collection.getDocuments();
-                    for (Map.Entry<String, DVDModel> E : dvds.entrySet()){
-                        dvd_models.add(E.getValue());
-                    }
-                    update_store_data_text(1);
-                    for (DVDModel doc : dvd_models){
-                        String capsuleLink = doc.getCapsuleArt();
-                        BufferedImage img = WindowNavigator.capsules().fetch(capsuleLink);
-                        if (img == null){
-                            capsule_list.add(null);
-                        } else {
-                            capsule_list.add(img.getScaledInstance(CAPSULE_SIZE.width, CAPSULE_SIZE.height, Image.SCALE_SMOOTH));
-                        }
-                    }
-                    int total = dvd_models.size() / 5;
-                    store_max_page = (dvd_models.size() - (total * 5)) > 0 ? total + 1 : total;
-                    update_store_page(1);
-                } catch (FirestoreModelException e){
-                    if (e.getClass() == NoConnectionException.class){
-                        JOptionPane.showMessageDialog(mw, "Không thể kết nối đến máy chủ Firestore. Hãy kiểm tra lại kết nối internet");
-                    } else if (e.getClass() == QueryRefusedException.class){
-                        JOptionPane.showMessageDialog(mw, "Đã xảy ra lỗi khi tìm kiếm thông tin. Xin hãy liên hệ cho Khánh Nam.");
-                    }
-                    L.log("MainWindow", e.toString());
-                } finally {
-                    mw.unlockInput();
+            mw.lockInput();
+            dvd_models.clear();
+            capsule_list.clear();
+            //-------------------------------------------------------
+            DVDCollection collection = new DVDCollection(WindowNavigator.db(), true).setRead();
+            filters.forEach(storeFilterSettingsElement -> {
+                if (storeFilterSettingsElement.getValue() != null) {
+                    collection.getBaseQuery().where(storeFilterSettingsElement.getValue().field,
+                            storeFilterSettingsElement.getValue().operator, storeFilterSettingsElement.getValue().value);
+//                        eligibleFilterCount.incrementAndGet();
+                    if (Objects.equals(storeFilterSettingsElement.getValue().field, "rated_type"))
+                        collection.getBaseQuery().orderBy("stock", FirestoreQuery.Direction.DESCENDING);
+                    else
+                        collection.getBaseQuery().orderBy(storeFilterSettingsElement.getValue().field, FirestoreQuery.Direction.DESCENDING);
                 }
+            });
+//                if (eligibleFilterCount.get() == 1)
+            update_store_page(0);
+            try{
+                Map<String, DVDModel> dvds = collection.getDocuments();
+                for (Map.Entry<String, DVDModel> E : dvds.entrySet()){
+                    dvd_models.add(E.getValue());
+                }
+                update_store_data_text(1);
+                final String[] capsuleUrls = new String[dvd_models.size()];
+                for (int i = 0; i < dvd_models.size(); i++) {
+                    capsuleUrls[i] = dvd_models.get(i).getCapsuleArt();
+                }
+                WindowNavigator.capsules().batchFetch(capsuleUrls);
+                long epoch = new GregorianCalendar().getTime().getTime() / 1000L;
+                for (int i = 0; i < dvds.size(); i++){
+                    DVDModel doc = dvd_models.get(i);
+                    long now = new GregorianCalendar().getTime().getTime() / 1000L;
+                    if (now - epoch > CAPSULE_FETCH_TIME) {
+                        capsule_list.add(null);
+                        continue;
+                    }
+                    String capsuleLink = doc.getCapsuleArt();
+                    BufferedImage img = WindowNavigator.capsules().fetch(capsuleLink);
+                    if (img == null){
+                        capsule_list.add(null);
+                    } else {
+                        capsule_list.add(img.getScaledInstance(CAPSULE_SIZE.width, CAPSULE_SIZE.height, Image.SCALE_SMOOTH));
+                    }
+                }
+                int total = dvd_models.size() / 5;
+                store_max_page = (dvd_models.size() - (total * 5)) > 0 ? total + 1 : total;
+                update_store_page(1);
+            } catch (FirestoreModelException e){
+                if (e.getClass() == NoConnectionException.class){
+                    JOptionPane.showMessageDialog(mw, "Không thể kết nối đến máy chủ Firestore. Hãy kiểm tra lại kết nối internet");
+                } else if (e.getClass() == QueryRefusedException.class){
+                    JOptionPane.showMessageDialog(mw, "Đã xảy ra lỗi khi tìm kiếm thông tin. Xin hãy liên hệ cho Khánh Nam.");
+                }
+                L.log("MainWindow", e.toString());
+            } finally {
+                mw.unlockInput();
             }
+//            synchronized (storeRefreshSynchronizer) {
+//            }
         }
     }
     private class UserRefreshHandler {
@@ -174,58 +189,61 @@ public class MainWindow extends JFrame {
             String uid = WindowNavigator.auth().getAuthWrapper().getAuthToken().getLocalId();
             FirestoreQuery fetchUser = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
                     .from("users").where("uid", FirestoreQuery.Operator.EQUAL, uid).relate(FirestoreQuery.Operator.AND);
+            final SafeFlag finisher = new SafeFlag(false);
             WindowNavigator.db().query(fetchUser, new FirestoreTaskReceiver() {
                 @Override
                 public void connectionFailed() {
                     JOptionPane.showMessageDialog(mw, "Không thể tra được thông tin người dung: không có kết nối internet");
+                    finisher.set();
                 }
                 @Override
                 public void requestFailed(int i, Map<String, String> map, String s) {
                     JOptionPane.showMessageDialog(mw, "Không thể tra được thông tin người dung: yêu cầu thất bại");
+                    finisher.set();
                 }
                 @Override
                 public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                    synchronized (userRefreshSynchronizer){
-                        Map<String, FirestoreDocument> docs = firestoreTaskResult.getDocuments();
-                        for (Map.Entry<String, FirestoreDocument> E : docs.entrySet()){
-                            user_profile = E.getValue();
-                            //-------------------------------------------------------------------------------------
-                            final SafeFlag is_mod_fetch_finished = new SafeFlag(false);
-                            FirestoreQuery fetch_moderation_status = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
-                                    .from("users_status").where("uid", FirestoreQuery.Operator.EQUAL, user_profile.getFields().get("uid").toString());
-                            WindowNavigator.db().query(fetch_moderation_status, new FirestoreTaskReceiver() {
-                                @Override
-                                public void connectionFailed() {
-                                    isAdmin.clear();
-                                    is_mod_fetch_finished.set();
-                                }
-                                @Override
-                                public void requestFailed(int i, Map<String, String> map, String s) {
-                                    isAdmin.clear();
-                                    is_mod_fetch_finished.set();
-                                }
-                                @Override
-                                public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
-                                    if (firestoreTaskResult.getDocuments().isEmpty()) isAdmin.clear();
-                                    else {
-                                        for (Map.Entry<String, FirestoreDocument> E : firestoreTaskResult.getDocuments().entrySet()){
-                                            if ((Boolean) E.getValue().getFields().get("isAdmin")){
-                                                isAdmin.set();
-                                            } else isAdmin.clear();
-                                            break;
-                                        }
+                    Map<String, FirestoreDocument> docs = firestoreTaskResult.getDocuments();
+                    for (Map.Entry<String, FirestoreDocument> E : docs.entrySet()){
+                        user_profile = E.getValue();
+                        //-------------------------------------------------------------------------------------
+                        final SafeFlag is_mod_fetch_finished = new SafeFlag(false);
+                        FirestoreQuery fetch_moderation_status = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
+                                .from("users_status").where("uid", FirestoreQuery.Operator.EQUAL, user_profile.getFields().get("uid").toString());
+                        WindowNavigator.db().query(fetch_moderation_status, new FirestoreTaskReceiver() {
+                            @Override
+                            public void connectionFailed() {
+                                isAdmin.clear();
+                                is_mod_fetch_finished.set();
+                            }
+                            @Override
+                            public void requestFailed(int i, Map<String, String> map, String s) {
+                                isAdmin.clear();
+                                is_mod_fetch_finished.set();
+                            }
+                            @Override
+                            public void queryCompleted(FirestoreTaskResult firestoreTaskResult) {
+                                if (firestoreTaskResult.getDocuments().isEmpty()) isAdmin.clear();
+                                else {
+                                    for (Map.Entry<String, FirestoreDocument> E : firestoreTaskResult.getDocuments().entrySet()){
+                                        if ((Boolean) E.getValue().getFields().get("isAdmin")){
+                                            isAdmin.set();
+                                        } else isAdmin.clear();
+                                        break;
                                     }
-                                    is_mod_fetch_finished.set();
-//                                    uf_moderation.setText(String.valueOf(isAdmin.get()));
-                                    //-------------------------------------------------------------------------------------
                                 }
-                            });
-                            is_mod_fetch_finished.waitToFinish();
-                            break;
-                        }
+                                is_mod_fetch_finished.set();
+//                                    uf_moderation.setText(String.valueOf(isAdmin.get()));
+                                //-------------------------------------------------------------------------------------
+                            }
+                        });
+                        is_mod_fetch_finished.waitToFinish();
+                        break;
                     }
+                    finisher.set();
                 }
             });
+            finisher.waitToFinish();
         }
     }
     private class DetailHandler {
@@ -235,32 +253,13 @@ public class MainWindow extends JFrame {
         }
         public void run(int idx){
             if (dvd_models.isEmpty()) return;
-            final FirestoreDocument pf_doc;
-            synchronized (userRefreshSynchronizer){
-                if (user_profile == null){
-                    JOptionPane.showMessageDialog(mw, "Không thể đọc được thông tin người dùng");
-                    return;
-                }
-                else {
-                    pf_doc = user_profile;
-                }
-            }
             mw.lockInput();
             final int anchor_index = (store_current_page - 1) * 5;
             final int curr = anchor_index + idx;
-            new Thread(() -> {
-                synchronized (rentHandlerSynchronizer){
-                    DVDModel doc = dvd_models.get(curr);
-                    Image capsule = capsule_list.get(curr);
-                    String imdb_link = doc.getImdbLink();
-                    String uid = pf_doc.getFields().get("uid").toString();
-                    int age = UserCreateForm.getAgeByDob(UserCreateForm.unixToDate((Long)pf_doc.getFields().get("dob")));
-                    final DVDInfoViewer rc = new DVDInfoViewer(doc, capsule, isAdmin.get());
-                    boolean accepted = rc.run();
-                    final boolean modified = rc.isModified();
-                    mw.unlockInput();
-                }
-            }).start();
+            DVDModel doc = dvd_models.get(curr);
+            Image capsule = capsule_list.get(curr);
+            new DVDInfoViewer(doc, capsule, isAdmin.get()).run();
+            mw.unlockInput();
         }
     }
 
@@ -384,7 +383,8 @@ public class MainWindow extends JFrame {
     }
 
     private void fetch_dvd_list(){
-        new Thread(()-> new StoreRefreshHandler(this).run()).start();
+        new StoreRefreshHandler(this).run();
+//        new Thread(()-> new StoreRefreshHandler(this).run()).start();
     }
     private void fetch_user_info(){
         new UserRefreshHandler(this).run();
@@ -459,69 +459,58 @@ public class MainWindow extends JFrame {
     }
     private void filterHandler(int index, JButton bFilter){
         if (isUpdatingFilters) return;
-        new Thread(() -> {
-            synchronized (filtersLock){
-                lockInput();
-                isUpdatingFilters = true;
-                if (Objects.equals(bFilter.getText(), "+")) addFilter(index, bFilter);
-                else removeFilter(index, bFilter);
-                isUpdatingFilters = false;
-                unlockInput();
-            }
-        }).start();
+        lockInput();
+        isUpdatingFilters = true;
+        if (Objects.equals(bFilter.getText(), "+")) addFilter(index, bFilter);
+        else removeFilter(index, bFilter);
+        isUpdatingFilters = false;
+        unlockInput();
+//        new Thread(() -> {
+//            synchronized (filtersLock){
+//            }
+//        }).start();
     }
     private void refreshTransactionList(){
-        synchronized (transactionListLock){
-            changeTransactionListState(false);
-            transactionModel.clear();
-            transactionIds.clear();
-        }
-        new Thread(() -> {
-            synchronized (transactionListLock){
-                final int selectedFilter;
-                if (rb_type.isSelected()) selectedFilter = 1;
-                else if (rb_amount.isSelected()) selectedFilter = 2;
-                else selectedFilter = 0;
-                FirestoreQuery getTransactions = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
-                        .from("ledger")
-                        .orderBy(selectedFilter == 2 ? "amount" : selectedFilter == 1 ? "isInput" : "time", cb_ascending.isSelected() ? FirestoreQuery.Direction.ASCENDING : FirestoreQuery.Direction.DESCENDING);
-                LedgerCollection ledgerCollection = new LedgerCollection(WindowNavigator.db(), true, getTransactions);
-                try {
-                    Map<String, LedgerModel> ledger = ledgerCollection.getDocuments();
-                    for (Map.Entry<String, LedgerModel> E : ledger.entrySet()){
-                        LedgerModel model = E.getValue();
-                        LocalDateTime transactionTime = LocalDateTime.ofInstant(Instant.ofEpochSecond(model.getTime()), ZoneId.systemDefault());
-                        final String textDisplay = "%s %d sản phẩm vào %s".formatted(model.getInput() ? "Nhập kho" : "Xuất kho", model.getAmount(), transactionTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-                        transactionModel.addElement(textDisplay);
-                        transactionIds.add(model);
-                    }
-                } catch (FirestoreModelException ex){
-                    if (ex.getClass() == NoConnectionException.class){
-                        JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Không có kết nối Internet");
-                    } else if (ex.getClass() == QueryRefusedException.class){
-                        JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Yêu cầu bị từ chối");
-                    }
-                    L.log("MainWindow", "Transaction request failed: %s".formatted(ex.toString()));
-                }
-
-                changeTransactionListState(true);
+        changeTransactionListState(false);
+        transactionModel.clear();
+        transactionIds.clear();
+        final int selectedFilter;
+        if (rb_type.isSelected()) selectedFilter = 1;
+        else if (rb_amount.isSelected()) selectedFilter = 2;
+        else selectedFilter = 0;
+        FirestoreQuery getTransactions = new FirestoreQuery(FirestoreQuery.QueryType.STRUCTURED_QUERY)
+                .from("ledger")
+                .orderBy(selectedFilter == 2 ? "amount" : selectedFilter == 1 ? "isInput" : "time", cb_ascending.isSelected() ? FirestoreQuery.Direction.ASCENDING : FirestoreQuery.Direction.DESCENDING);
+        LedgerCollection ledgerCollection = new LedgerCollection(WindowNavigator.db(), true, getTransactions);
+        try {
+            Map<String, LedgerModel> ledger = ledgerCollection.getDocuments();
+            for (Map.Entry<String, LedgerModel> E : ledger.entrySet()){
+                LedgerModel model = E.getValue();
+                LocalDateTime transactionTime = LocalDateTime.ofInstant(Instant.ofEpochSecond(model.getTime()), ZoneId.systemDefault());
+                final String textDisplay = "%s %d sản phẩm vào %s".formatted(model.getInput() ? "Nhập kho" : "Xuất kho", model.getAmount(), transactionTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                transactionModel.addElement(textDisplay);
+                transactionIds.add(model);
             }
-        }).start();
+        } catch (FirestoreModelException ex){
+            if (ex.getClass() == NoConnectionException.class){
+                JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Không có kết nối Internet");
+            } else if (ex.getClass() == QueryRefusedException.class){
+                JOptionPane.showMessageDialog(this, "Yêu cầu thông tin giao dịch thất bại: Yêu cầu bị từ chối");
+            }
+            L.log("MainWindow", "Transaction request failed: %s".formatted(ex.toString()));
+        }
+
+        changeTransactionListState(true);
     }
     private void viewTransaction(){
-        new Thread(() -> {
-            synchronized (transactionListLock){
-                int idx = transactionList.getSelectedIndex();
-                if (idx == -1) return;
-                changeTransactionListState(false);
-                new LedgerViewer(transactionIds.get(idx)).run();
-                changeTransactionListState(true);
-            }
-        }).start();
+        int idx = transactionList.getSelectedIndex();
+        if (idx == -1) return;
+        changeTransactionListState(false);
+        new LedgerViewer(transactionIds.get(idx)).run();
+        changeTransactionListState(true);
     }
     public MainWindow(){
-        super("Thuê DVD OwO");
-
+        super("Kho DVD OwO");
         setLocation(WindowNavigator.getCenterOfScreen(this, WINDOW_SIZE));
         setContentPane(MainPanel);
         setVisible(true);
@@ -538,62 +527,54 @@ public class MainWindow extends JFrame {
         }
 
         transactionModel = (DefaultListModel<String>) transactionList.getModel();
-        refreshTransactionList();
 
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                engine0.terminate();
+                engine1.terminate();
                 WindowNavigator.closeWindow(mw);
             }
         });
-        b_prev.addActionListener(e -> {
+        b_prev.addActionListener(e -> engine0.dispatch(() -> {
             store_current_page = clamp(store_current_page - 1, 1, store_max_page);
             update_store_page(store_current_page);
-        });
-        b_next.addActionListener(e -> {
+        }));
+        b_next.addActionListener(e -> engine0.dispatch(() -> {
             store_current_page = clamp(store_current_page + 1, 1, store_max_page);
             update_store_page(store_current_page);
-        });
-        b_vendors.addActionListener(e -> new Thread(() -> {
+        }));
+        b_vendors.addActionListener(e -> engine0.dispatch(() -> {
             lockInput();
             new VendorsViewer().run();
             unlockInput();
-        }).start());
-        b_add_dvd.addActionListener(e -> new Thread(() -> {
+        }));
+        b_add_dvd.addActionListener(e -> engine0.dispatch(() -> {
             lockInput();
             new AddDVD(false, null).run();
             unlockInput();
-        }).start());
-        b_transaction_sort.addActionListener(e -> refreshTransactionList());
-        b_refresh.addActionListener(e -> fetch_dvd_list());
-        filter0.addActionListener(e -> {
-            filterHandler(0, filter0);
-        });
-        filter1.addActionListener(e -> {
-            filterHandler(1, filter1);
-        });
-        fetch_dvd_list();
-        fetch_user_info();
-        bc_0.addActionListener(e -> {
-            viewDetailAt(0);
-        });
-        bc_1.addActionListener(e -> {
-            viewDetailAt(1);
-        });
-        bc_2.addActionListener(e -> {
-            viewDetailAt(2);
-        });
-        bc_3.addActionListener(e -> {
-            viewDetailAt(3);
-        });
-        bc_4.addActionListener(e -> {
-            viewDetailAt(4);
-        });
+        }));
+        b_transaction_sort.addActionListener(e -> engine1.dispatch(this::refreshTransactionList));
+        b_refresh.addActionListener(e -> engine0.dispatch(this::fetch_dvd_list));
+        filter0.addActionListener(e -> engine0.dispatch(() -> filterHandler(0, filter0)));
+        filter1.addActionListener(e -> engine0.dispatch(() -> filterHandler(1, filter1)));
+        bc_0.addActionListener(e -> engine0.dispatch(() -> viewDetailAt(0)));
+        bc_1.addActionListener(e -> engine0.dispatch(() -> viewDetailAt(1)));
+        bc_2.addActionListener(e -> engine0.dispatch(() -> viewDetailAt(2)));
+        bc_3.addActionListener(e -> engine0.dispatch(() -> viewDetailAt(3)));
+        bc_4.addActionListener(e -> engine0.dispatch(() -> viewDetailAt(4)));
         transactionList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) viewTransaction();
+                if (e.getClickCount() == 2) engine1.dispatch(() -> viewTransaction());
             }
         });
+        update_store_page(0);
+        lockInput();
+        engine1.dispatch(this::refreshTransactionList);
+        engine0.dispatch(this::fetch_dvd_list);
+        engine0.dispatch(this::lockInput);
+        engine0.dispatch(this::fetch_user_info);
+        engine0.dispatch(this::unlockInput);
     }
 }
