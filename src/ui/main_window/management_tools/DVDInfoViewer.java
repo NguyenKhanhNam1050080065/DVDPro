@@ -86,7 +86,7 @@ public class DVDInfoViewer extends JFrame {
         f_name.setText(dvd_name);
         f_director.setText(details.getDirector());
         f_duration.setText(duration_txt.formatted(_h, _m));
-        f_age.setText(rating_text.formatted(details.getRatedType().toString(), rated_age));
+        f_age.setText(rating_text.formatted(details.getRatedType(), rated_age));
         f_stock.setText(String.valueOf(details.getStock()));
         f_year.setText(String.valueOf(details.getYear()));
         f_category.setText(category_str.toString());

@@ -127,7 +127,7 @@ public class NewOperation extends JFrame {
     private void afterEvent(Runnable event){
         if (!returnLock.get()) returnLock.set();
 //        new Thread(this::dispose).start();
-        dispose();
+        new Thread(this::dispose).start();
         if (event != null) event.run();
     }
     public NewOperation(String imdbLink, String dvdTitle, String dvdId, long stock, boolean isInput){
@@ -164,6 +164,7 @@ public class NewOperation extends JFrame {
                     final long maxAmount = Long.parseLong(tf_total.getText());
                     try {
                         amountLong = Long.parseLong(tf_amount.getText());
+                        if (amountLong <= 0) throw new NumberFormatException();
                     } catch (NumberFormatException ex){
                         JOptionPane.showMessageDialog(no, "Giá trị đầu vào không hợp lệ: %s".formatted(tf_amount.getText()));
                         return;

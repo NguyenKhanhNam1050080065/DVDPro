@@ -175,8 +175,6 @@ public class MainWindow extends JFrame {
             } finally {
                 mw.unlockInput();
             }
-//            synchronized (storeRefreshSynchronizer) {
-//            }
         }
     }
     private class UserRefreshHandler {
