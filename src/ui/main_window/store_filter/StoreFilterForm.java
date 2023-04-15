@@ -20,7 +20,7 @@ public class StoreFilterForm extends JFrame {
             FirestoreQuery.Operator.EQUAL };
     // 2 + 4 + 16 = 22
     // Firestore ko hỗ trợ toán tử "in" :<
-    private static final int[] SELECTABLE_OPS_MASKS = { 22, 0, 22, 22, 22, 8 + 1 };
+    private static final int[] SELECTABLE_OPS_MASKS = { 22, 0, 22, 22, 22, 8 + 4 + 1 };
 
     private static final Object[] ALLOWED_VALUES = { "M", "TV", "PG", 13, 17, 18, 30, 60, 120, 2015, 2018, 2022,
             "Action", "Crime", "Fantasy", "Drama", "Adventure", "Comedy", "Military", "Thriller" };

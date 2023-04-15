@@ -127,10 +127,10 @@ public class MainWindow extends JFrame {
                     collection.getBaseQuery().where(storeFilterSettingsElement.getValue().field,
                             storeFilterSettingsElement.getValue().operator, storeFilterSettingsElement.getValue().value);
 //                        eligibleFilterCount.incrementAndGet();
-                    if (Objects.equals(storeFilterSettingsElement.getValue().field, "rated_type"))
-                        collection.getBaseQuery().orderBy("stock", FirestoreQuery.Direction.DESCENDING);
-                    else
-                        collection.getBaseQuery().orderBy(storeFilterSettingsElement.getValue().field, FirestoreQuery.Direction.DESCENDING);
+//                    if (Objects.equals(storeFilterSettingsElement.getValue().field, "rated_type"))
+//                        collection.getBaseQuery().orderBy("stock", FirestoreQuery.Direction.DESCENDING);
+//                    else
+//                        collection.getBaseQuery().orderBy(storeFilterSettingsElement.getValue().field, FirestoreQuery.Direction.DESCENDING);
                 }
             });
 //                if (eligibleFilterCount.get() == 1)
@@ -312,7 +312,7 @@ public class MainWindow extends JFrame {
         }
         title.setText(doc.getName());
         duration.setText(duration_txt.formatted(_h, _m) + " | "
-                + rating_text.formatted(doc.getRatedAge(), rated_age)
+                + rating_text.formatted(doc.getRatedType(), rated_age)
                 + " | " + doc.getYear());
         year.setText(category_str.toString());
         host.setVisible(true);
